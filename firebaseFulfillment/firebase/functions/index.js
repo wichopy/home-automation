@@ -3,7 +3,6 @@
 const functions = require('firebase-functions'); // Cloud Functions for Firebase library
 const DialogflowApp = require('actions-on-google').DialogflowApp; // Google Assistant helper library
 const axios = require("axios");
-const dotenv = require("dotenv").config();
 
 exports.dialogflowFirebaseFulfillment = functions.https.onRequest((request, response) => {
   console.log('Dialogflow Request headers: ' + JSON.stringify(request.headers));
@@ -48,7 +47,9 @@ function processV1Request (request, response) {
       }
     },
     'turnLightOnInRoom': () => {
-      let responseMsg = 'Sure, let me turn ' + parameters.State + ' in the lights in the ' + parameters.Room
+      // if light is already on, say its already on.
+      // if light is off, switch it on and say sure, Let me turn it on.
+      let responseMsg = `Sure, let me turn ${parameters.State} the lights in the ${parameters.Room}`
       if (requestSource === googleAssistantRequest) {
         sendGoogleResponse(responseMsg); // Send simple response to user
       } else {
@@ -56,32 +57,64 @@ function processV1Request (request, response) {
       }
     },
     'homeStatus': () => {
-        let responseString
-        axios({
-            url: process.env.SOCKET_URL,
-            method: 'get',
-            headers: {
-                authorization: `Bearer ${process.env.token}`
-            }
+      const filterOnLights = light => light.state === 0
+      const filterOffLights = light => light.state === 1
+      let responseString
+      axios({
+          url: functions.config().billiam.url,
+          method: 'get',
+          headers: {
+              authorization: `Bearer ${functions.config().billiam.key}`
+          }
+      })
+      .then(res => {
+        let statesOfInterest = parameters.State
+        let sockets = res.data.sockets
+        let socketsOfInterest = []
+
+        statesOfInterest.forEach(state => {
+          if (state === 'on') {
+            socketsOfInterest = socketsOfInterest.concat(
+              sockets.filter(filterOnLights)
+            )
+          }
+
+          if (state === 'off') {
+            socketsOfInterest = socketsOfInterest.concat(
+              sockets.filter(filterOffLights)
+            )
+          }
         })
-          .then(res => {
-            responseString = 'Currently in your home you lights '
-            res.data.sockets && res.data.sockets.forEach((light, i) => {
-              if (i === res.data.sockets.length - 1) {
-                responseString += ` and ${light.name}`
-              } else {
-                responseString += light.name
-              }
-            })
-            if (requestSource === googleAssistantRequest) {
-              sendGoogleResponse(responseString); // Send simple response to user
+
+        if (socketsOfInterest.length === 0) {
+          responseString = 'You do not have any sockets that are '+ statesOfInterest[0]
+        } else {
+          responseString = 'Currently in your home sockets '
+          socketsOfInterest.forEach((light, i) => {
+            if (i !== socketsOfInterest.length - 1) {
+              responseString += ` ${light.name} `
             } else {
-              sendResponse(responseString); // Send simple response to user
+              responseString += ` and ${light.name} `
             }
-          }).catch(err => {
-              console.log(err)
-              sendResponse(responseString + 'I failed :(, I could not reach the server. This is the reason' + String(err))
           })
+
+          responseString += ('are turned ' + (
+            statesOfInterest.length === 1 ?
+              `${statesOfInterest[0]} .` : (
+                `${statesOfInterest[0]} and ${statesOfInterest[1]}.`
+              )
+            ))
+        }
+
+        if (requestSource === googleAssistantRequest) {
+          sendGoogleResponse(responseString); // Send simple response to user
+        } else {
+          sendResponse(responseString); // Send simple response to user
+        }
+      }).catch(err => {
+          console.log(err)
+          sendResponse(responseString + 'I failed :(, I could not reach the server. This is the reason' + String(err))
+      })
     },
     // Default handler for unknown or undefined actions
     'default': () => {
