@@ -47,14 +47,49 @@ function processV1Request (request, response) {
       }
     },
     'turnLightOnInRoom': () => {
+      let responseString
       // if light is already on, say its already on.
       // if light is off, switch it on and say sure, Let me turn it on.
-      let responseMsg = `Sure, let me turn ${parameters.State} the lights in the ${parameters.Room}`
-      if (requestSource === googleAssistantRequest) {
-        sendGoogleResponse(responseMsg); // Send simple response to user
-      } else {
-        sendResponse(responseMsg); // Send simple response to user
-      }
+      axios({
+        url: functions.config().billiam.url,
+        method: 'get',
+        headers: {
+            authorization: `Bearer ${functions.config().billiam.key}`
+        }
+      }).then(res => {
+        let stateOfInterest = parameters.State
+        let sockets = res.data.sockets
+        const socketOfInterest = sockets.filter(socket => socket.name === parameters.Room)[0]
+
+        if (!socketOfInterest) {
+          return sendResponse(`Whoops, I could not find a socket named ${parameters.Room}. Sorry :(`)
+        }
+        const currentState = socketOfInterest.state
+
+        if (
+          (stateOfInterest === 'on' && currentState === 1) ||
+          (stateOfInterest === 'off' && currentState === 0)
+        ) {
+          // turn light on or off
+          responseString = `Sure, let me turn ${parameters.State} the lights in ${parameters.Room}`
+        } else if (
+          (stateOfInterest === 'on' && currentState === 0) ||
+          (stateOfInterest === 'off' && currentState === 1)
+        ) {
+          // light is already on
+          responseString = `Whoops, the lights in ${parameters.Room} are already ${parameters.State}`
+
+          if (requestSource === googleAssistantRequest) {
+            return sendGoogleResponse(responseString); // Send simple response to user
+          } else {
+            return sendResponse(responseString); // Send simple response to user
+          }
+        }
+      }).catch(err => {
+        console.log(err)
+        sendResponse(responseString + 'I failed :(, I could not reach the server. This is the reason' + String(err))
+      })
+
     },
     'homeStatus': () => {
       const filterOnLights = light => light.state === 0
@@ -66,8 +101,7 @@ function processV1Request (request, response) {
           headers: {
               authorization: `Bearer ${functions.config().billiam.key}`
           }
-      })
-      .then(res => {
+      }).then(res => {
         let statesOfInterest = parameters.State
         let sockets = res.data.sockets
         let socketsOfInterest = []
